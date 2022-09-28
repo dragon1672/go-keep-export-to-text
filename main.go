@@ -79,7 +79,14 @@ func (n *Note) OPMLString() string {
 	sb.WriteString(n.CreatedMicros.DateStr())
 	sb.WriteString(") ")
 	xml.Escape(&sb, []byte(n.Title))
-	sb.WriteString("\">\n")
+	sb.WriteString("\"")
+	tags := n.tagsString(' ')
+	if len(tags) > 0 {
+		sb.WriteString(" _note=\"")
+		xml.Escape(&sb, []byte(tags))
+		sb.WriteString("\"")
+	}
+	sb.WriteString(">\n")
 	if len(n.TextContent) > 0 {
 		sb.WriteString("        <outline text=\"---\" _note=\"")
 		xml.Escape(&sb, []byte(n.TextContent))
@@ -98,15 +105,13 @@ func (n *Note) OPMLString() string {
 	return sb.String()
 }
 
-func (n *Note) footerString() string {
+func (n *Note) tagsString(delim rune) string {
 	sb := strings.Builder{}
 	if len(n.Labels) > 0 {
-		labelDelim := ""
 		for _, label := range n.Labels {
-			sb.WriteString(labelDelim)
 			sb.WriteRune('#')
 			sb.WriteString(label.Name)
-			labelDelim = "\n"
+			sb.WriteRune(delim)
 		}
 	}
 	return sb.String()
@@ -144,7 +149,7 @@ func (n *Note) String() string {
 		listDelim = "\n"
 	}
 
-	footer := n.footerString()
+	footer := n.tagsString('\n')
 	if len(footer) > 0 {
 		sb.WriteRune('\n')
 		sb.WriteRune('\n')
