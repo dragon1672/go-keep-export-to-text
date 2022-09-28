@@ -75,18 +75,18 @@ func (j *MicroTime) DateStr() string {
 
 func (n *Note) OPMLString() string {
 	sb := strings.Builder{}
-	sb.WriteString("      <outline text=\"!(")
-	sb.WriteString(n.CreatedMicros.DateStr())
-	sb.WriteString(") ")
+	sb.WriteString("      <outline text=\"")
 	xml.Escape(&sb, []byte(n.Title))
 	sb.WriteString("\"")
+
+	sb.WriteString(" _note=\"!(")
+	sb.WriteString(n.CreatedMicros.DateStr())
+	sb.WriteString(") ")
 	tags := n.tagsString(' ')
-	if len(tags) > 0 {
-		sb.WriteString(" _note=\"")
-		xml.Escape(&sb, []byte(tags))
-		sb.WriteString("\"")
-	}
-	sb.WriteString(">\n")
+	xml.Escape(&sb, []byte(tags))
+	sb.WriteRune('"')     // end of note
+	sb.WriteString(">\n") // end of 1st outline
+
 	if len(n.TextContent) > 0 {
 		sb.WriteString("        <outline text=\"---\" _note=\"")
 		xml.Escape(&sb, []byte(n.TextContent))
