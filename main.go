@@ -1,9 +1,5 @@
-/* Converts https://takeout.google.com google keep export into text files
-
-1. Export data to https://takeout.google.com (pro-tip: uncheck all and only export google keep)
-2.
-
-*/
+// Converts https://takeout.google.com google keep and exports to hopefully useful formats
+// This is all in 1 file to make this more copy paste forkable.
 package main
 
 import (
