@@ -1,4 +1,4 @@
-module KeepExportToText
+module github.com/dragon1672/go-keep-export-to-text
 
 go 1.18
 
