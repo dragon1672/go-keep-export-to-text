@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/golang/glog"
@@ -23,7 +24,7 @@ import (
 var (
 	ZipFilePath    = flag.String("zip_file_path", "takeout-example.zip", "zip file path to be unpacked and parsed")
 	SubFolderPath  = flag.String("sub_folder_path", "Takeout/Keep/", "required sub folder")
-	StdOut         = flag.Bool("std_out", false, "optionally print contents to console")
+	StdOut         = flag.Bool("std_out", true, "optionally print contents to console")
 	OutputDir      = flag.String("output_dir", "out", "output file dir. Optionally create controlled by --create_out")
 	OutputOPMLFile = flag.String("output_ompl_file", "out.opml", "output OPML file. Optionally create controlled by --create_out")
 	CreateOut      = flag.Bool("create_out", true, "Attempt to create output dir")
@@ -78,20 +79,24 @@ func (j *MicroTime) DateStr() string {
 }
 
 type opmlBuilder struct {
-	notes []*Note
+	Notes []*Note
 }
 
 func (o *opmlBuilder) AddNote(note *Note) {
-	o.notes = append(o.notes, note)
+	o.Notes = append(o.Notes, note)
 }
 
 func (o *opmlBuilder) String() string {
-	opmlSB := strings.Builder{}
-	for _, note := range o.notes {
-		opmlSB.WriteString(note.OPMLString())
-		opmlSB.WriteRune('\n')
-	}
-	return fmt.Sprintf(`
+	tmpl, err := template.New("text_file").Funcs(template.FuncMap{
+		"escapeXML": func(s string) string {
+			sb := strings.Builder{}
+			xml.Escape(&sb, []byte(s))
+			return sb.String()
+		},
+	}).Parse(`
+{{- define "DynoDate"}}!({{.DateStr}}){{end -}}
+{{- define "TagList"}}{{range .}} #{{.Name}}{{end}}{{end -}}
+{{- /* start of file */ -}}
 <?xml version="1.0" encoding="utf-8"?>
 <opml version="2.0">
   <head>
@@ -102,85 +107,58 @@ func (o *opmlBuilder) String() string {
   </head>
   <body>
     <outline text="Google Keep Export">
-%s
+{{- range .Notes }}
+        <outline text="{{.Title | escapeXML}}" _note="{{template "DynoDate" .CreatedMicros}}{{template "TagList" .Labels}}">
+		{{- with .TextContent}}
+            <outline text="---" _note="{{. | escapeXML}}"/>
+		{{- end}}
+		{{- with .ListContent}}{{range .}}
+            <outline text="{{.Text | escapeXML}}"{{if .IsChecked}} complete="true"{{end}}/>{{end}}
+		{{- end}}
+{{- end}} {{/* end of Notes range */}}
     </outline>
   </body>
-</opml>`, opmlSB.String())
-}
+</opml>
 
-func (n *Note) OPMLString() string {
-	sb := strings.Builder{}
-	sb.WriteString("      <outline text=\"")
-	xml.Escape(&sb, []byte(n.Title))
-	sb.WriteString("\"")
-
-	sb.WriteString(" _note=\"!(")
-	sb.WriteString(n.CreatedMicros.DateStr())
-	sb.WriteString(") ")
-	tags := n.tagsString(' ')
-	xml.Escape(&sb, []byte(tags))
-	sb.WriteRune('"')     // end of note
-	sb.WriteString(">\n") // end of 1st outline
-
-	if len(n.TextContent) > 0 {
-		sb.WriteString("        <outline text=\"---\" _note=\"")
-		xml.Escape(&sb, []byte(n.TextContent))
-		sb.WriteString("\"/>\n")
+{{- /* end of file */ -}}
+`)
+	if err != nil {
+		panic(err)
 	}
-	for _, listEntry := range n.ListContent {
-		sb.WriteString("        <outline text=\"")
-		xml.Escape(&sb, []byte(listEntry.Text))
-		sb.WriteString("\"")
-		if listEntry.IsChecked {
-			sb.WriteString(` complete="true"`)
-		}
-		sb.WriteString("/>\n")
-	}
-	sb.WriteString(`      </outline>`)
-	return sb.String()
-}
 
-func (n *Note) tagsString(delim rune) string {
 	sb := strings.Builder{}
-	if len(n.Labels) > 0 {
-		for _, label := range n.Labels {
-			sb.WriteRune('#')
-			sb.WriteString(label.Name)
-			sb.WriteRune(delim)
-		}
+	if err := tmpl.Execute(&sb, o); err != nil {
+		panic(err)
 	}
 	return sb.String()
 }
 
 func (n *Note) String() string {
+	tmpl, err := template.New("text_file").Parse(`
+{{- .Title}}
+{{- with .CreatedMicros}}
+Created: {{.DateStr}}{{end}}
+{{- with .EditedMicros}}
+Edited: {{.DateStr}}{{end}}
+
+{{with .TextContent}}{{.}}
+{{end}}
+{{- with .ListContent}}{{range .}}{{.}}
+{{end}}
+{{- end}}{{- /* end of body */}} 
+
+{{- with .Labels}}
+{{range .}}#{{.Name}}
+{{end}}{{end}}
+{{- /* end of file */ -}}
+`)
+	if err != nil {
+		panic(err)
+	}
+
 	sb := strings.Builder{}
-	sb.WriteString(n.Title)
-	sb.WriteRune('\n')
-	if n.CreatedMicros != nil {
-		sb.WriteString("Created: ")
-		sb.WriteString(n.CreatedMicros.DateStr())
-		sb.WriteRune('\n')
-	}
-	if n.EditedMicros != nil {
-		sb.WriteString("Edited: ")
-		sb.WriteString(n.EditedMicros.DateStr())
-		sb.WriteRune('\n')
-	}
-
-	sb.WriteRune('\n')
-	sb.WriteString(n.TextContent)
-	listDelim := ""
-	for _, listEntry := range n.ListContent {
-		sb.WriteString(listDelim)
-		sb.WriteString(listEntry.String()))
-		listDelim = "\n"
-	}
-
-	footer := n.tagsString('\n')
-	if len(footer) > 0 {
-		sb.WriteRune('\n')
-		sb.WriteRune('\n')
-		sb.WriteString(footer)
+	if err := tmpl.Execute(&sb, n); err != nil {
+		panic(err)
 	}
 	return sb.String()
 }
@@ -289,7 +267,7 @@ func main() {
 		}
 
 		if *StdOut {
-			fmt.Printf("```\n%s\n```", note)
+			fmt.Printf("```note\n%s\n```", note)
 		}
 
 		if len(*OutputDir) > 0 {
@@ -318,7 +296,7 @@ func main() {
 			log.Fatalf("error writing file %s: %v", *OutputOPMLFile, err)
 		}
 		if *StdOut {
-			fmt.Println(data)
+			fmt.Printf("```opml\n%s\n```", data)
 		}
 	}
 }
