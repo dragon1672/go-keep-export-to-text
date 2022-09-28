@@ -13,6 +13,7 @@
 
 # program specific default output
 out/
+*.opml
 
 # Dependency directories (remove the comment below to include it)
 vendor
