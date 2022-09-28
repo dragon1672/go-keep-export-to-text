@@ -16,7 +16,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/golang/glog"
 )
@@ -29,12 +31,14 @@ var (
 )
 
 type Note struct {
-	Title       string      `json:"title"`
-	TextContent string      `json:"textContent"`
-	IsTrashed   bool        `json:"isTrashed"`
-	IsArchived  bool        `json:"isArchived"`
-	ListContent []ListItem  `json:"listContent"`
-	Labels      []ListLabel `json:"labels"`
+	Title         string      `json:"title"`
+	TextContent   string      `json:"textContent"`
+	IsTrashed     bool        `json:"isTrashed"`
+	IsArchived    bool        `json:"isArchived"`
+	ListContent   []ListItem  `json:"listContent"`
+	Labels        []ListLabel `json:"labels"`
+	EditedMicros  *MicroTime  `json:"userEditedTimestampUsec"`
+	CreatedMicros *MicroTime  `json:"createdTimestampUsec"`
 }
 
 type ListItem struct {
@@ -47,10 +51,40 @@ type ListLabel struct {
 	Name string `json:"name"`
 }
 
+type MicroTime time.Time
+
+func (j *MicroTime) UnmarshalJSON(data []byte) error {
+	millis, err := strconv.ParseInt(string(data), 10, 64)
+	if err != nil {
+		return err
+	}
+	*j = MicroTime(time.Unix(0, millis*int64(time.Microsecond)))
+	return nil
+}
+
+func (j *MicroTime) Time() time.Time {
+	return time.Time(*j)
+}
+
+func (j *MicroTime) DateStr() string {
+	return j.Time().Format("2006-01-02")
+}
+
 func (n *Note) String() string {
 	sb := strings.Builder{}
 	sb.WriteString(n.Title)
 	sb.WriteRune('\n')
+	if n.CreatedMicros != nil {
+		sb.WriteString("Created: ")
+		sb.WriteString(n.CreatedMicros.DateStr())
+		sb.WriteRune('\n')
+	}
+	if n.EditedMicros != nil {
+		sb.WriteString("Edited: ")
+		sb.WriteString(n.EditedMicros.DateStr())
+		sb.WriteRune('\n')
+	}
+
 	sb.WriteRune('\n')
 	sb.WriteString(n.TextContent)
 	listDelim := ""
