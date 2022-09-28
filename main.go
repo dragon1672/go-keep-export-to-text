@@ -46,7 +46,6 @@ type ListItem struct {
 	IsChecked bool   `json:"isChecked"`
 }
 
-//"labels":[{"name":"Thoughts"}]
 type ListLabel struct {
 	Name string `json:"name"`
 }
@@ -61,7 +60,6 @@ func (j *MicroTime) UnmarshalJSON(data []byte) error {
 	*j = MicroTime(time.Unix(0, millis*int64(time.Microsecond)))
 	return nil
 }
-
 func (j *MicroTime) String() string {
 	return time.Time(*j).Format("2006-01-02")
 }
@@ -73,7 +71,6 @@ type opmlBuilder struct {
 func (o *opmlBuilder) AddNote(note *Note) {
 	o.Notes = append(o.Notes, note)
 }
-
 func (o *opmlBuilder) String() string {
 	tmpl, err := template.New("text_file").Funcs(template.FuncMap{
 		"escapeXML": func(s string) string {
@@ -155,8 +152,11 @@ Edited: {{.}}{{end}}
 	return sb.String()
 }
 
-// processZipSource iterates over zip files.
-func processZipSource(source string, fun func(*zip.File) error) error {
+type ZipToNoteReader struct {
+	SubFolderPath string
+}
+
+func (z *ZipToNoteReader) streamZipFiles(source string, fun func(*zip.File) error) error {
 	reader, err := zip.OpenReader(source)
 	if err != nil {
 		return err
@@ -183,27 +183,7 @@ func processZipSource(source string, fun func(*zip.File) error) error {
 	}
 	return nil
 }
-
-func writeFile(data string, destination string, createDir bool) error {
-	if createDir {
-		if err := os.MkdirAll(filepath.Dir(destination), os.ModePerm); err != nil {
-			return err
-		}
-	}
-
-	destinationFile, err := os.Create(destination)
-	if err != nil {
-		return err
-	}
-	defer destinationFile.Close()
-
-	if _, err := destinationFile.WriteString(data); err != nil {
-		return err
-	}
-	return destinationFile.Sync()
-}
-
-func file2Note(f *zip.File) (*Note, error) {
+func (z *ZipToNoteReader) file2Note(f *zip.File) (*Note, error) {
 	zippedFile, err := f.Open()
 	if err != nil {
 		return nil, err
@@ -224,52 +204,67 @@ func file2Note(f *zip.File) (*Note, error) {
 	}
 	return note, nil
 }
+func (z *ZipToNoteReader) StreamNotes(source string, fun func(*Note, os.FileInfo) error) error {
+	return z.streamZipFiles(source, func(file *zip.File) error {
+		if path.Ext(file.Name) != ".json" {
+			return nil // skip
+		}
+		if !strings.Contains(file.Name, *SubFolderPath) {
+			return nil // skip
+		}
+		note, err := z.file2Note(file)
+		if err != nil {
+			return fmt.Errorf("error reading file %s: %v", file.Name, err)
+		}
+		if note.IsTrashed || note.IsArchived {
+			glog.Infof("skipping trashed or archived entry %v", file.Name)
+			return nil // skip the dead stuffs
+		}
+		return fun(note, file.FileInfo())
+	})
+}
 
-// validateAndConvertZipFileToNote will return nil if the file should be skipped.
-func validateAndConvertZipFileToNote(file *zip.File) (*Note, error) {
-	if path.Ext(file.Name) != ".json" {
-		return nil, nil // skip
+func writeFile(data string, destination string, createDir bool) error {
+	if createDir {
+		if err := os.MkdirAll(filepath.Dir(destination), os.ModePerm); err != nil {
+			return err
+		}
 	}
-	if !strings.Contains(file.Name, *SubFolderPath) {
-		return nil, nil // skip
-	}
-	note, err := file2Note(file)
+
+	destinationFile, err := os.Create(destination)
 	if err != nil {
-		return nil, fmt.Errorf("error reading file %s: %v", file.Name, err)
+		return err
 	}
-	if note.IsTrashed || note.IsArchived {
-		glog.Infof("skipping trashed or archived entry %v", file.Name)
-		return nil, nil // skip the dead stuffs
+	defer destinationFile.Close()
+
+	if _, err := destinationFile.WriteString(data); err != nil {
+		return err
 	}
-	return note, nil
+	return destinationFile.Sync()
 }
 
 func main() {
 	flag.Parse()
 
+	reader := ZipToNoteReader{
+		SubFolderPath: *SubFolderPath,
+	}
+
 	opmlBld := opmlBuilder{}
 
-	if err := processZipSource(*ZipFilePath, func(file *zip.File) error {
-		note, err := validateAndConvertZipFileToNote(file)
-		if err != nil {
-			return fmt.Errorf("error reading file %s: %v", file.Name, err)
-		}
-		if note == nil {
-			return nil // skip
-		}
-
+	if err := reader.StreamNotes(*ZipFilePath, func(note *Note, fileInfo os.FileInfo) error {
 		if *StdOut {
 			fmt.Printf("```note\n%s\n```\n", note)
 		}
 
 		if len(*OutputDir) > 0 {
-			trimmedName := strings.TrimSuffix(filepath.Base(file.FileInfo().Name()), filepath.Ext(file.FileInfo().Name()))
+			trimmedName := strings.TrimSuffix(filepath.Base(fileInfo.Name()), filepath.Ext(fileInfo.Name()))
 			filePath, err := filepath.Abs(filepath.Join(*OutputDir, trimmedName+".txt"))
 			if err != nil {
 				return err
 			}
 			if err := writeFile(note.String(), filePath, *CreateOut); err != nil {
-				return fmt.Errorf("error writing file %s: %v", file.Name, err)
+				return fmt.Errorf("error writing file %s: %v", fileInfo.Name(), err)
 			}
 		}
 
