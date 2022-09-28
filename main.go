@@ -73,6 +73,37 @@ func (j *MicroTime) DateStr() string {
 	return j.Time().Format("2006-01-02")
 }
 
+type opmlBuilder struct {
+	notes []*Note
+}
+
+func (o *opmlBuilder) AddNote(note *Note) {
+	o.notes = append(o.notes, note)
+}
+
+func (o *opmlBuilder) String() string {
+	opmlSB := strings.Builder{}
+	for _, note := range o.notes {
+		opmlSB.WriteString(note.OPMLString())
+		opmlSB.WriteRune('\n')
+	}
+	return fmt.Sprintf(`
+<?xml version="1.0" encoding="utf-8"?>
+<opml version="2.0">
+  <head>
+    <title></title>
+    <flavor>dynalist</flavor>
+    <source>https://github.com/dragon1672</source>
+    <ownerName>One Smart Cookie</ownerName>
+  </head>
+  <body>
+    <outline text="Google Keep Export">
+%s
+    </outline>
+  </body>
+</opml>`, opmlSB.String())
+}
+
 func (n *Note) OPMLString() string {
 	sb := strings.Builder{}
 	sb.WriteString("      <outline text=\"")
@@ -250,7 +281,7 @@ func validateAndConvertZipFileToNote(file *zip.File) (*Note, error) {
 func main() {
 	flag.Parse()
 
-	opmlSB := strings.Builder{}
+	opmlBld := opmlBuilder{}
 
 	if err := processZipSource(*ZipFilePath, func(file *zip.File) error {
 		note, err := validateAndConvertZipFileToNote(file)
@@ -277,8 +308,7 @@ func main() {
 		}
 
 		if len(*OutputOPMLFile) > 0 {
-			opmlSB.WriteString(note.OPMLString())
-			opmlSB.WriteRune('\n')
+			opmlBld.AddNote(note)
 		}
 
 		return nil
@@ -287,22 +317,7 @@ func main() {
 	}
 
 	if len(*OutputOPMLFile) > 0 {
-		data := fmt.Sprintf(`
-<?xml version="1.0" encoding="utf-8"?>
-<opml version="2.0">
-  <head>
-    <title></title>
-    <flavor>dynalist</flavor>
-    <source>https://github.com/dragon1672</source>
-    <ownerName>One Smart Cookie</ownerName>
-  </head>
-  <body>
-    <outline text="Google Keep Export">
-%s
-    </outline>
-  </body>
-</opml>`, opmlSB.String())
-		if err := writeFile(data, *OutputOPMLFile, *CreateOut); err != nil {
+		if err := writeFile(opmlBld.String(), *OutputOPMLFile, *CreateOut); err != nil {
 			log.Fatalf("error writing file %s: %v", *OutputOPMLFile, err)
 		}
 	}
