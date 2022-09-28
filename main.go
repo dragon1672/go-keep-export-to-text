@@ -262,7 +262,7 @@ func main() {
 		}
 
 		if *StdOut {
-
+			fmt.Println(note)
 		}
 
 		if len(*OutputDir) > 0 {
