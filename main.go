@@ -45,6 +45,14 @@ type ListItem struct {
 	IsChecked bool   `json:"isChecked"`
 }
 
+func (l *ListItem) String() string {
+	mark := " "
+	if l.IsChecked {
+		mark = "X"
+	}
+	return fmt.Sprintf("[%s] - %s", mark, l.Text)
+}
+
 //"labels":[{"name":"Thoughts"}]
 type ListLabel struct {
 	Name string `json:"name"`
@@ -164,15 +172,7 @@ func (n *Note) String() string {
 	listDelim := ""
 	for _, listEntry := range n.ListContent {
 		sb.WriteString(listDelim)
-		sb.WriteRune('[')
-		if listEntry.IsChecked {
-			sb.WriteRune('X')
-		} else {
-			sb.WriteRune(' ')
-		}
-		sb.WriteRune(']')
-		sb.WriteRune(' ')
-		sb.WriteString(listEntry.Text)
+		sb.WriteString(listEntry.String()))
 		listDelim = "\n"
 	}
 
@@ -289,7 +289,7 @@ func main() {
 		}
 
 		if *StdOut {
-			fmt.Println(note)
+			fmt.Printf("```\n%s\n```", note)
 		}
 
 		if len(*OutputDir) > 0 {
@@ -313,8 +313,12 @@ func main() {
 	}
 
 	if len(*OutputOPMLFile) > 0 {
-		if err := writeFile(opmlBld.String(), *OutputOPMLFile, *CreateOut); err != nil {
+		data := opmlBld.String()
+		if err := writeFile(data, *OutputOPMLFile, *CreateOut); err != nil {
 			log.Fatalf("error writing file %s: %v", *OutputOPMLFile, err)
+		}
+		if *StdOut {
+			fmt.Println(data)
 		}
 	}
 }
