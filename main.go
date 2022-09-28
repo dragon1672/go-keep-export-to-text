@@ -46,14 +46,6 @@ type ListItem struct {
 	IsChecked bool   `json:"isChecked"`
 }
 
-func (l *ListItem) String() string {
-	mark := " "
-	if l.IsChecked {
-		mark = "X"
-	}
-	return fmt.Sprintf("[%s] - %s", mark, l.Text)
-}
-
 //"labels":[{"name":"Thoughts"}]
 type ListLabel struct {
 	Name string `json:"name"`
@@ -70,12 +62,8 @@ func (j *MicroTime) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (j *MicroTime) Time() time.Time {
-	return time.Time(*j)
-}
-
-func (j *MicroTime) DateStr() string {
-	return j.Time().Format("2006-01-02")
+func (j *MicroTime) String() string {
+	return time.Time(*j).Format("2006-01-02")
 }
 
 type opmlBuilder struct {
@@ -94,7 +82,7 @@ func (o *opmlBuilder) String() string {
 			return sb.String()
 		},
 	}).Parse(`
-{{- define "DynoDate"}}!({{.DateStr}}){{end -}}
+{{- define "DynoDate"}}!({{.}}){{end -}}
 {{- define "TagList"}}{{range .}} #{{.Name}}{{end}}{{end -}}
 {{- /* start of file */ -}}
 <?xml version="1.0" encoding="utf-8"?>
@@ -135,15 +123,19 @@ func (o *opmlBuilder) String() string {
 
 func (n *Note) String() string {
 	tmpl, err := template.New("text_file").Parse(`
+{{- define "DynoDate"}}!({{.}}){{end -}}
+{{- define "ListCheck"}}[{{if .IsChecked}}X{{else}} {{end}}]{{end -}}
+{{- define "ListEntry"}}{{template "ListCheck" .}} - {{.Text}}{{end -}}
+{{- /* start of file */ -}}
 {{- .Title}}
 {{- with .CreatedMicros}}
-Created: {{.DateStr}}{{end}}
+Created: {{.}}{{end}}
 {{- with .EditedMicros}}
-Edited: {{.DateStr}}{{end}}
+Edited: {{.}}{{end}}
 
 {{with .TextContent}}{{.}}
 {{end}}
-{{- with .ListContent}}{{range .}}{{.}}
+{{- with .ListContent}}{{range .}}{{template "ListEntry" .}}
 {{end}}
 {{- end}}{{- /* end of body */}} 
 
@@ -267,7 +259,7 @@ func main() {
 		}
 
 		if *StdOut {
-			fmt.Printf("```note\n%s\n```", note)
+			fmt.Printf("```note\n%s\n```\n", note)
 		}
 
 		if len(*OutputDir) > 0 {
@@ -296,7 +288,7 @@ func main() {
 			log.Fatalf("error writing file %s: %v", *OutputOPMLFile, err)
 		}
 		if *StdOut {
-			fmt.Printf("```opml\n%s\n```", data)
+			fmt.Printf("```opml\n%s\n```\n", data)
 		}
 	}
 }
