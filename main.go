@@ -209,7 +209,7 @@ func (z *ZipToNoteReader) StreamNotes(source string, fun func(*Note, os.FileInfo
 		if path.Ext(file.Name) != ".json" {
 			return nil // skip
 		}
-		if !strings.Contains(file.Name, *SubFolderPath) {
+		if len(z.SubFolderPath) > 0 && !strings.Contains(file.Name, z.SubFolderPath) {
 			return nil // skip
 		}
 		note, err := z.file2Note(file)
