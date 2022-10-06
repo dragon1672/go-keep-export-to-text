@@ -19,13 +19,15 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
 	ZipFilePath    = flag.String("zip_file_path", "takeout-example.zip", "zip file path to be unpacked and parsed")
 	SubFolderPath  = flag.String("sub_folder_path", "Takeout/Keep/", "required sub folder")
 	StdOut         = flag.Bool("std_out", true, "optionally print contents to console")
-	TxtOutputDir   = flag.String("txt_output_dir", "out", "output file dir. Optionally create controlled by --create_out")
+	TxtOutputDir   = flag.String("txt_output_dir", "out", "text file output file dir. Optionally create controlled by --create_out")
+	MdOutputDir    = flag.String("md_output_dir", "md_out", "markdown output file dir. Optionally create controlled by --create_out")
 	OutputOPMLFile = flag.String("output_ompl_file", "out.opml", "output OPML file. Optionally create controlled by --create_out")
 	CreateOut      = flag.Bool("create_out", true, "Attempt to create output dir")
 )
@@ -266,6 +268,49 @@ func (t *TextFileWriter) WriteNote(n *Note) error {
 	return t.writer.WriteFile(t.note2Txt(n), filePath)
 }
 
+type MdFileWriter struct {
+	writer *fileWriter
+	outDir string
+}
+
+func (m *MdFileWriter) note2Txt(n *Note) string {
+	tmpl, err := template.New("text_file").Parse(`
+{{- define "ListCheck"}}[{{if .IsChecked}}x{{else}} {{end}}]{{end -}}
+{{- define "ListEntry"}} - {{template "ListCheck" .}} {{.Text}}{{end -}}
+{{- /* start of file */ -}}
+# {{.Title}}{{- with .CreatedMicros}} - {{.}}{{end}}
+{{- with .EditedMicros}}
+Last Edited: {{.}}{{end}}
+
+{{with .TextContent}}{{.}}
+{{end}}
+{{- with .ListContent}}{{range .}}{{template "ListEntry" .}}
+{{end}}
+{{- end}}{{- /* end of body */}} 
+
+{{- with .Labels}}
+{{range .}}#{{.Name}}
+{{end}}{{end}}
+{{- /* end of file */ -}}
+`)
+	if err != nil {
+		panic(err)
+	}
+
+	sb := strings.Builder{}
+	if err := tmpl.Execute(&sb, n); err != nil {
+		panic(err)
+	}
+	return sb.String()
+}
+func (m *MdFileWriter) WriteNote(n *Note) error {
+	filePath, err := filepath.Abs(filepath.Join(m.outDir, n.FileName+".md"))
+	if err != nil {
+		return err
+	}
+	return m.writer.WriteFile(m.note2Txt(n), filePath)
+}
+
 func main() {
 	flag.Parse()
 
@@ -286,22 +331,38 @@ func main() {
 		}
 	}
 
+	var mdWriter *MdFileWriter
+	if len(*MdOutputDir) > 0 {
+		mdWriter = &MdFileWriter{
+			writer: writer,
+			outDir: *MdOutputDir,
+		}
+	}
+
 	if err := reader.StreamNotes(*ZipFilePath, func(note *Note) error {
 		if *StdOut {
 			fmt.Printf("```note\n%+v\n```\n", note)
 		}
 
+		g := new(errgroup.Group)
+
 		if txtWriter != nil {
-			if err := txtWriter.WriteNote(note); err != nil {
-				return err
-			}
+			g.Go(func() error {
+				return txtWriter.WriteNote(note)
+			})
+		}
+
+		if mdWriter != nil {
+			g.Go(func() error {
+				return mdWriter.WriteNote(note)
+			})
 		}
 
 		if len(*OutputOPMLFile) > 0 {
 			opmlBld.AddNote(note)
 		}
 
-		return nil
+		return g.Wait()
 	}); err != nil {
 		log.Fatal(err)
 	}
