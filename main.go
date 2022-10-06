@@ -69,11 +69,11 @@ func (j *MicroTime) String() string {
 }
 
 type opmlBuilder struct {
-	Notes []*Note
+	notes []*Note
 }
 
 func (o *opmlBuilder) AddNote(note *Note) {
-	o.Notes = append(o.Notes, note)
+	o.notes = append(o.notes, note)
 }
 func (o *opmlBuilder) String() string {
 	tmpl, err := template.New("text_file").Funcs(template.FuncMap{
@@ -96,7 +96,7 @@ func (o *opmlBuilder) String() string {
   </head>
   <body>
     <outline text="Google Keep Export">
-{{- range .Notes }}
+{{- range . }}
         <outline text="{{.Title | escapeXML}}" _note="{{template "DynoDate" .CreatedMicros}}{{template "TagList" .Labels}}">
 		{{- with .TextContent}}
             <outline text="---" _note="{{. | escapeXML}}"/>
@@ -104,7 +104,7 @@ func (o *opmlBuilder) String() string {
 		{{- with .ListContent}}{{range .}}
             <outline text="{{.Text | escapeXML}}"{{if .IsChecked}} complete="true"{{end}}/>{{end}}
 		{{- end}}
-{{- end}} {{/* end of Notes range */}}
+{{- end}} {{/* end of notes range */}}
     </outline>
   </body>
 </opml>
@@ -116,7 +116,7 @@ func (o *opmlBuilder) String() string {
 	}
 
 	sb := strings.Builder{}
-	if err := tmpl.Execute(&sb, o); err != nil {
+	if err := tmpl.Execute(&sb, o.notes); err != nil {
 		panic(err)
 	}
 	return sb.String()
