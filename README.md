@@ -14,9 +14,12 @@ Note this will not include things like images / colors / sharing / etc
 
 #### Note about Google Keep note exports
 
-- FileNames
+- FileNames (depends on `--output_file_name_strat`)
     - The filename in the zip file will prefer the note title but parsed to be URL safe and handle collisions
         - If there is no file name it appears to take on a timestamp based on the last edit time
+    - `--output_file_name_strat=direct_export`: will output the file name directly as above
+    - `--output_file_name_strat=favor_date`: will attempt to output the file according to it's date `YYYY-MM-DD`
+        - if there are collisions, the following files will `YYYY-MM-DD_${filename}`
 - List entries do not include information about nesting
     - In google keep a checklist can have 1 level of nesting, but this data doesn't appear to be reflected in the output
       json. It might exist in the HTML, but I haven't bothered digging that deep.
@@ -24,7 +27,7 @@ Note this will not include things like images / colors / sharing / etc
 #### Text Formatting
 
 Note the format of the text file is an unstable thing to rely on, I would recommend forking this repo to make formatting
-modifications so you are working with the structured JSON data.
+modifications, so you are working with the structured JSON data.
 
 - The filename will reflect the same name as the takeout export filename
 - File Contents will include
@@ -42,6 +45,10 @@ Tip: You can do some filtering if you have grepable entries like labels
 $ mkdir ma-cool-label
 $ grep "#ma-cool-label" -rl . | xargs -I % cp "%" ma-cool-label/
 ```
+
+### Google Keep to Markdown
+
+Similar to text files but markdown, This can be referenced by markdown readers like https://obsidian.md/
 
 ### Google Keep to Evernote
 

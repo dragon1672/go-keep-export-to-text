@@ -23,15 +23,32 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// Inputs
 var (
-	ZipFilePath    = flag.String("zip_file_path", "takeout-example.zip", "zip file path to be unpacked and parsed")
-	SubFolderPath  = flag.String("sub_folder_path", "Takeout/Keep/", "required sub folder")
+	ZipFilePath   = flag.String("zip_file_path", "takeout-example.zip", "zip file path to be unpacked and parsed")
+	SubFolderPath = flag.String("sub_folder_path", "Takeout/Keep/", "required sub folder")
+)
+
+// Outputs
+var (
 	StdOut         = flag.Bool("std_out", true, "optionally print contents to console")
-	TxtOutputDir   = flag.String("txt_output_dir", "out", "text file output file dir. Optionally create controlled by --create_out")
-	MdOutputDir    = flag.String("md_output_dir", "md_out", "markdown output file dir. Optionally create controlled by --create_out")
-	OutputOPMLFile = flag.String("output_ompl_file", "out.opml", "output OPML file. Optionally create controlled by --create_out")
-	CreateOut      = flag.Bool("create_out", true, "Attempt to create output dir")
-	DefaultTags    = flag.String("default_tags", "google_keep_export", "comma seperated list of default tags to apply to all tags")
+	TxtOutputDir   = flag.String("txt_output_dir", "out", "text file output file dir. Optionally create directories controlled by --create_out")
+	MdOutputDir    = flag.String("md_output_dir", "md_out", "markdown output file dir. Optionally create directories controlled by --create_out")
+	OutputOPMLFile = flag.String("output_ompl_file", "out.opml", "output OPML file. Optionally create directories controlled by --create_out")
+)
+
+const (
+	StratDirectExport = "direct_export"
+	StratFavorDate    = "favor_date" // attempt to only include the date (YYYY-MM-DD) will fall back to date prefixed `YYYY-MM-DD_${direct_export}`
+)
+
+// Configurations
+var (
+	FileNameStrat      = flag.String("output_file_name_strat", StratFavorDate, "How to resolve file names")
+	CreateYearFolders  = flag.Bool("output_create_year_folders", true, "Create sub folders for each year")
+	CreateMonthFolders = flag.Bool("output_create_month_folders", true, "Create sub folders for each month (requires --output_create_year_folders, otherwise is ignored) This will include both the month number (0 padded), and the month name")
+	CreateOut          = flag.Bool("create_out", true, "Attempt to create output dir")
+	DefaultTags        = flag.String("default_tags", "google_keep_export", "comma seperated list of default tags to apply to all tags")
 )
 
 type ListItem struct {
@@ -66,8 +83,11 @@ func (j *MicroTime) UnmarshalJSON(data []byte) error {
 	*j = MicroTime(time.Unix(0, millis*int64(time.Microsecond)))
 	return nil
 }
+func (j *MicroTime) Time() time.Time {
+	return time.Time(*j)
+}
 func (j *MicroTime) String() string {
-	return time.Time(*j).Format("2006-01-02")
+	return j.Time().Format("2006-01-02")
 }
 
 type ZipToNoteReader struct {
@@ -179,6 +199,42 @@ func (f *fileWriter) WriteFile(data string, destination string) error {
 	return destinationFile.Sync()
 }
 
+type fileNameGenerator struct {
+	GenerateYearFolders  bool
+	GenerateMonthFolders bool
+	NameStrat            string
+
+	mu            sync.Mutex
+	reservedPaths map[string]bool
+}
+
+func (f *fileNameGenerator) GenerateAndReserve(n *Note) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reservedPaths == nil {
+		f.reservedPaths = make(map[string]bool)
+	}
+	fileName := n.FileName // default to STRAT_DIRECT_EXPORT
+	if f.NameStrat == StratDirectExport {
+		fileName = n.FileName
+	} else if f.NameStrat == StratFavorDate {
+		fileName = n.CreatedMicros.String() // attempt to make just the date
+		if _, ok := f.reservedPaths[fileName]; ok {
+			fileName = fmt.Sprintf("%s_%s", n.CreatedMicros.String(), n.FileName)
+		}
+	}
+	if f.GenerateYearFolders {
+		prefix := fmt.Sprint(n.CreatedMicros.Time().Year())
+		if f.GenerateMonthFolders {
+			month := fmt.Sprintf("%02d-%s", n.CreatedMicros.Time().Month(), n.CreatedMicros.Time().Month())
+			prefix = path.Join(prefix, month)
+		}
+		fileName = path.Join(prefix, fileName)
+	}
+	f.reservedPaths[fileName] = true
+	return fileName
+}
+
 type opmlBuilder struct {
 	mu     sync.RWMutex
 	notes  []*Note
@@ -243,8 +299,9 @@ func (o *opmlBuilder) WriteOPML(outFile string) error {
 }
 
 type TextFileWriter struct {
-	writer *fileWriter
-	outDir string
+	writer    *fileWriter
+	generator *fileNameGenerator
+	outDir    string
 }
 
 func (t *TextFileWriter) note2Txt(n *Note) string {
@@ -280,7 +337,8 @@ Edited: {{.}}{{end}}
 	return sb.String()
 }
 func (t *TextFileWriter) WriteNote(n *Note) error {
-	filePath, err := filepath.Abs(filepath.Join(t.outDir, n.FileName+".txt"))
+	fileName := t.generator.GenerateAndReserve(n)
+	filePath, err := filepath.Abs(filepath.Join(t.outDir, fileName+".txt"))
 	if err != nil {
 		return err
 	}
@@ -288,9 +346,9 @@ func (t *TextFileWriter) WriteNote(n *Note) error {
 }
 
 type MdFileWriter struct {
-	writer       *fileWriter
-	outDir       string
-	dateExported map[string]bool
+	writer    *fileWriter
+	generator *fileNameGenerator
+	outDir    string
 }
 
 func (m *MdFileWriter) note2Md(n *Note) string {
@@ -325,16 +383,8 @@ Last Edited: {{.}}{{end}}
 	return sb.String()
 }
 func (m *MdFileWriter) WriteNote(n *Note) error {
-	if m.dateExported == nil {
-		m.dateExported = make(map[string]bool)
-	}
-	filename := fmt.Sprintf("%s.md", n.CreatedMicros)
-	if _, ok := m.dateExported[filename]; ok {
-		// simple date already exported, include the og file name
-		filename = fmt.Sprintf("%s_%s.md", n.CreatedMicros, n.FileName)
-	}
-	m.dateExported[filename] = true
-	filePath, err := filepath.Abs(filepath.Join(m.outDir, filename))
+	fileName := m.generator.GenerateAndReserve(n)
+	filePath, err := filepath.Abs(filepath.Join(m.outDir, fileName+".md"))
 	if err != nil {
 		return err
 	}
@@ -352,6 +402,11 @@ func main() {
 		CreateDir: *CreateOut,
 		Stdout:    *StdOut,
 	}
+	fileGenerator := &fileNameGenerator{
+		GenerateYearFolders:  *CreateYearFolders,
+		GenerateMonthFolders: *CreateMonthFolders,
+		NameStrat:            *FileNameStrat,
+	}
 
 	var opmlBld *opmlBuilder
 	if len(*OutputOPMLFile) > 0 {
@@ -360,16 +415,18 @@ func main() {
 	var txtWriter *TextFileWriter
 	if len(*TxtOutputDir) > 0 {
 		txtWriter = &TextFileWriter{
-			writer: writer,
-			outDir: *TxtOutputDir,
+			writer:    writer,
+			generator: fileGenerator,
+			outDir:    *TxtOutputDir,
 		}
 	}
 
 	var mdWriter *MdFileWriter
 	if len(*MdOutputDir) > 0 {
 		mdWriter = &MdFileWriter{
-			writer: writer,
-			outDir: *MdOutputDir,
+			writer:    writer,
+			generator: fileGenerator,
+			outDir:    *MdOutputDir,
 		}
 	}
 
