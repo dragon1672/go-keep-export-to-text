@@ -25,21 +25,10 @@ var (
 	ZipFilePath    = flag.String("zip_file_path", "takeout-example.zip", "zip file path to be unpacked and parsed")
 	SubFolderPath  = flag.String("sub_folder_path", "Takeout/Keep/", "required sub folder")
 	StdOut         = flag.Bool("std_out", true, "optionally print contents to console")
-	OutputDir      = flag.String("output_dir", "out", "output file dir. Optionally create controlled by --create_out")
+	TxtOutputDir   = flag.String("txt_output_dir", "out", "output file dir. Optionally create controlled by --create_out")
 	OutputOPMLFile = flag.String("output_ompl_file", "out.opml", "output OPML file. Optionally create controlled by --create_out")
 	CreateOut      = flag.Bool("create_out", true, "Attempt to create output dir")
 )
-
-type Note struct {
-	Title         string      `json:"title"`
-	TextContent   string      `json:"textContent"`
-	IsTrashed     bool        `json:"isTrashed"`
-	IsArchived    bool        `json:"isArchived"`
-	ListContent   []ListItem  `json:"listContent"`
-	Labels        []ListLabel `json:"labels"`
-	EditedMicros  *MicroTime  `json:"userEditedTimestampUsec"`
-	CreatedMicros *MicroTime  `json:"createdTimestampUsec"`
-}
 
 type ListItem struct {
 	Text      string `json:"text"`
@@ -48,6 +37,19 @@ type ListItem struct {
 
 type ListLabel struct {
 	Name string `json:"name"`
+}
+
+type Note struct {
+	FileName string
+	// parsed fields
+	Title         string      `json:"title"`
+	TextContent   string      `json:"textContent"`
+	IsTrashed     bool        `json:"isTrashed"`
+	IsArchived    bool        `json:"isArchived"`
+	ListContent   []ListItem  `json:"listContent"`
+	Labels        []ListLabel `json:"labels"`
+	EditedMicros  *MicroTime  `json:"userEditedTimestampUsec"`
+	CreatedMicros *MicroTime  `json:"createdTimestampUsec"`
 }
 
 type MicroTime time.Time
@@ -118,40 +120,6 @@ func (o *opmlBuilder) String() string {
 	return sb.String()
 }
 
-func (n *Note) String() string {
-	tmpl, err := template.New("text_file").Parse(`
-{{- define "DynoDate"}}!({{.}}){{end -}}
-{{- define "ListCheck"}}[{{if .IsChecked}}X{{else}} {{end}}]{{end -}}
-{{- define "ListEntry"}}{{template "ListCheck" .}} - {{.Text}}{{end -}}
-{{- /* start of file */ -}}
-{{- .Title}}
-{{- with .CreatedMicros}}
-Created: {{.}}{{end}}
-{{- with .EditedMicros}}
-Edited: {{.}}{{end}}
-
-{{with .TextContent}}{{.}}
-{{end}}
-{{- with .ListContent}}{{range .}}{{template "ListEntry" .}}
-{{end}}
-{{- end}}{{- /* end of body */}} 
-
-{{- with .Labels}}
-{{range .}}#{{.Name}}
-{{end}}{{end}}
-{{- /* end of file */ -}}
-`)
-	if err != nil {
-		panic(err)
-	}
-
-	sb := strings.Builder{}
-	if err := tmpl.Execute(&sb, n); err != nil {
-		panic(err)
-	}
-	return sb.String()
-}
-
 type ZipToNoteReader struct {
 	SubFolderPath string
 }
@@ -194,7 +162,9 @@ func (z *ZipToNoteReader) file2Note(f *zip.File) (*Note, error) {
 	if err != nil {
 		return nil, err
 	}
-	note := &Note{}
+	note := &Note{
+		FileName: strings.TrimSuffix(filepath.Base(f.FileInfo().Name()), filepath.Ext(f.FileInfo().Name())),
+	}
 	if err := json.Unmarshal(data, note); err != nil {
 		return nil, err
 	}
@@ -204,7 +174,7 @@ func (z *ZipToNoteReader) file2Note(f *zip.File) (*Note, error) {
 	}
 	return note, nil
 }
-func (z *ZipToNoteReader) StreamNotes(source string, fun func(*Note, os.FileInfo) error) error {
+func (z *ZipToNoteReader) StreamNotes(source string, fun func(*Note) error) error {
 	return z.streamZipFiles(source, func(file *zip.File) error {
 		if path.Ext(file.Name) != ".json" {
 			return nil // skip
@@ -220,15 +190,23 @@ func (z *ZipToNoteReader) StreamNotes(source string, fun func(*Note, os.FileInfo
 			glog.Infof("skipping trashed or archived entry %v", file.Name)
 			return nil // skip the dead stuffs
 		}
-		return fun(note, file.FileInfo())
+		return fun(note)
 	})
 }
 
-func writeFile(data string, destination string, createDir bool) error {
-	if createDir {
+type fileWriter struct {
+	CreateDir bool
+	Stdout    bool // also write to std out
+}
+
+func (f *fileWriter) WriteFile(data string, destination string) error {
+	if f.CreateDir {
 		if err := os.MkdirAll(filepath.Dir(destination), os.ModePerm); err != nil {
 			return err
 		}
+	}
+	if f.Stdout {
+		fmt.Printf("```%s\n%s\n```\n", destination, data)
 	}
 
 	destinationFile, err := os.Create(destination)
@@ -243,6 +221,51 @@ func writeFile(data string, destination string, createDir bool) error {
 	return destinationFile.Sync()
 }
 
+type TextFileWriter struct {
+	writer *fileWriter
+	outDir string
+}
+
+func (t *TextFileWriter) note2Txt(n *Note) string {
+	tmpl, err := template.New("text_file").Parse(`
+{{- define "ListCheck"}}[{{if .IsChecked}}x{{else}} {{end}}]{{end -}}
+{{- define "ListEntry"}} - {{template "ListCheck" .}} {{.Text}}{{end -}}
+{{- /* start of file */ -}}
+{{- .Title}}
+{{- with .CreatedMicros}}
+Created: {{.}}{{end}}
+{{- with .EditedMicros}}
+Edited: {{.}}{{end}}
+
+{{with .TextContent}}{{.}}
+{{end}}
+{{- with .ListContent}}{{range .}}{{template "ListEntry" .}}
+{{end}}
+{{- end}}{{- /* end of body */}} 
+
+{{- with .Labels}}
+{{range .}}#{{.Name}}
+{{end}}{{end}}
+{{- /* end of file */ -}}
+`)
+	if err != nil {
+		panic(err)
+	}
+
+	sb := strings.Builder{}
+	if err := tmpl.Execute(&sb, n); err != nil {
+		panic(err)
+	}
+	return sb.String()
+}
+func (t *TextFileWriter) WriteNote(n *Note) error {
+	filePath, err := filepath.Abs(filepath.Join(t.outDir, n.FileName+".txt"))
+	if err != nil {
+		return err
+	}
+	return t.writer.WriteFile(t.note2Txt(n), filePath)
+}
+
 func main() {
 	flag.Parse()
 
@@ -250,21 +273,27 @@ func main() {
 		SubFolderPath: *SubFolderPath,
 	}
 
-	opmlBld := opmlBuilder{}
+	opmlBld := &opmlBuilder{}
+	writer := &fileWriter{
+		CreateDir: *CreateOut,
+		Stdout:    *StdOut,
+	}
+	var txtWriter *TextFileWriter
+	if len(*TxtOutputDir) > 0 {
+		txtWriter = &TextFileWriter{
+			writer: writer,
+			outDir: *TxtOutputDir,
+		}
+	}
 
-	if err := reader.StreamNotes(*ZipFilePath, func(note *Note, fileInfo os.FileInfo) error {
+	if err := reader.StreamNotes(*ZipFilePath, func(note *Note) error {
 		if *StdOut {
-			fmt.Printf("```note\n%s\n```\n", note)
+			fmt.Printf("```note\n%+v\n```\n", note)
 		}
 
-		if len(*OutputDir) > 0 {
-			trimmedName := strings.TrimSuffix(filepath.Base(fileInfo.Name()), filepath.Ext(fileInfo.Name()))
-			filePath, err := filepath.Abs(filepath.Join(*OutputDir, trimmedName+".txt"))
-			if err != nil {
+		if txtWriter != nil {
+			if err := txtWriter.WriteNote(note); err != nil {
 				return err
-			}
-			if err := writeFile(note.String(), filePath, *CreateOut); err != nil {
-				return fmt.Errorf("error writing file %s: %v", fileInfo.Name(), err)
 			}
 		}
 
@@ -279,11 +308,8 @@ func main() {
 
 	if len(*OutputOPMLFile) > 0 {
 		data := opmlBld.String()
-		if err := writeFile(data, *OutputOPMLFile, *CreateOut); err != nil {
+		if err := writer.WriteFile(data, *OutputOPMLFile); err != nil {
 			log.Fatalf("error writing file %s: %v", *OutputOPMLFile, err)
-		}
-		if *StdOut {
-			fmt.Printf("```opml\n%s\n```\n", data)
 		}
 	}
 }
