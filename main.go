@@ -69,65 +69,6 @@ func (j *MicroTime) String() string {
 	return time.Time(*j).Format("2006-01-02")
 }
 
-type opmlBuilder struct {
-	mu    sync.RWMutex
-	notes []*Note
-}
-
-func (o *opmlBuilder) AddNote(note *Note) {
-	o.mu.Lock()
-	o.notes = append(o.notes, note)
-	o.mu.Unlock()
-}
-func (o *opmlBuilder) String() string {
-	tmpl, err := template.New("text_file").Funcs(template.FuncMap{
-		"escapeXML": func(s string) string {
-			sb := strings.Builder{}
-			xml.Escape(&sb, []byte(s))
-			return sb.String()
-		},
-	}).Parse(`
-{{- define "DynoDate"}}!({{.}}){{end -}}
-{{- define "TagList"}}{{range .}} #{{.Name}}{{end}}{{end -}}
-{{- /* start of file */ -}}
-<?xml version="1.0" encoding="utf-8"?>
-<opml version="2.0">
-  <head>
-    <title></title>
-    <flavor>dynalist</flavor>
-    <source>https://github.com/dragon1672</source>
-    <ownerName>One Smart Cookie</ownerName>
-  </head>
-  <body>
-    <outline text="Google Keep Export">
-{{- range . }}
-        <outline text="{{.Title | escapeXML}}" _note="{{template "DynoDate" .CreatedMicros}}{{template "TagList" .Labels}}">
-		{{- with .TextContent}}
-            <outline text="---" _note="{{. | escapeXML}}"/>
-		{{- end}}
-		{{- with .ListContent}}{{range .}}
-            <outline text="{{.Text | escapeXML}}"{{if .IsChecked}} complete="true"{{end}}/>{{end}}
-		{{- end}}
-{{- end}} {{/* end of notes range */}}
-    </outline>
-  </body>
-</opml>
-
-{{- /* end of file */ -}}
-`)
-	if err != nil {
-		panic(err)
-	}
-
-	o.mu.RLock()
-	defer o.mu.RUnlock()
-	sb := strings.Builder{}
-	if err := tmpl.Execute(&sb, o.notes); err != nil {
-		panic(err)
-	}
-	return sb.String()
-}
-
 type ZipToNoteReader struct {
 	SubFolderPath string
 }
@@ -202,6 +143,10 @@ func (z *ZipToNoteReader) StreamNotes(source string, fun func(*Note) error) erro
 	})
 }
 
+// ==================
+//       Writers
+// ==================
+
 type fileWriter struct {
 	CreateDir bool
 	Stdout    bool // also write to std out
@@ -227,6 +172,69 @@ func (f *fileWriter) WriteFile(data string, destination string) error {
 		return err
 	}
 	return destinationFile.Sync()
+}
+
+type opmlBuilder struct {
+	mu     sync.RWMutex
+	notes  []*Note
+	Writer *fileWriter
+}
+
+func (o *opmlBuilder) AddNote(note *Note) {
+	o.mu.Lock()
+	o.notes = append(o.notes, note)
+	o.mu.Unlock()
+}
+func (o *opmlBuilder) ToOPML() string {
+	tmpl, err := template.New("text_file").Funcs(template.FuncMap{
+		"escapeXML": func(s string) string {
+			sb := strings.Builder{}
+			xml.Escape(&sb, []byte(s))
+			return sb.String()
+		},
+	}).Parse(`
+{{- define "DynoDate"}}!({{.}}){{end -}}
+{{- define "TagList"}}{{range .}} #{{.Name}}{{end}}{{end -}}
+{{- /* start of file */ -}}
+<?xml version="1.0" encoding="utf-8"?>
+<opml version="2.0">
+  <head>
+    <title></title>
+    <flavor>dynalist</flavor>
+    <source>https://github.com/dragon1672</source>
+    <ownerName>One Smart Cookie</ownerName>
+  </head>
+  <body>
+    <outline text="Google Keep Export">
+{{- range . }}
+        <outline text="{{.Title | escapeXML}}" _note="{{template "DynoDate" .CreatedMicros}}{{template "TagList" .Labels}}">
+		{{- with .TextContent}}
+            <outline text="---" _note="{{. | escapeXML}}"/>
+		{{- end}}
+		{{- with .ListContent}}{{range .}}
+            <outline text="{{.Text | escapeXML}}"{{if .IsChecked}} complete="true"{{end}}/>{{end}}
+		{{- end}}
+{{- end}} {{/* end of notes range */}}
+    </outline>
+  </body>
+</opml>
+
+{{- /* end of file */ -}}
+`)
+	if err != nil {
+		panic(err)
+	}
+
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	sb := strings.Builder{}
+	if err := tmpl.Execute(&sb, o.notes); err != nil {
+		panic(err)
+	}
+	return sb.String()
+}
+func (o *opmlBuilder) WriteOPML(outFile string) error {
+	return o.Writer.WriteFile(o.ToOPML(), outFile)
 }
 
 type TextFileWriter struct {
@@ -330,7 +338,7 @@ func main() {
 
 	var opmlBld *opmlBuilder
 	if len(*OutputOPMLFile) > 0 {
-		opmlBld = &opmlBuilder{}
+		opmlBld = &opmlBuilder{Writer: writer}
 	}
 	var txtWriter *TextFileWriter
 	if len(*TxtOutputDir) > 0 {
@@ -382,9 +390,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if len(*OutputOPMLFile) > 0 {
-		data := opmlBld.String()
-		if err := writer.WriteFile(data, *OutputOPMLFile); err != nil {
+	if opmlBld != nil {
+		if err := opmlBld.WriteOPML(*OutputOPMLFile); err != nil {
 			log.Fatalf("error writing file %s: %v", *OutputOPMLFile, err)
 		}
 	}
