@@ -323,11 +323,14 @@ func main() {
 	reader := ZipToNoteReader{
 		SubFolderPath: *SubFolderPath,
 	}
-
-	opmlBld := &opmlBuilder{}
 	writer := &fileWriter{
 		CreateDir: *CreateOut,
 		Stdout:    *StdOut,
+	}
+
+	var opmlBld *opmlBuilder
+	if len(*OutputOPMLFile) > 0 {
+		opmlBld = &opmlBuilder{}
 	}
 	var txtWriter *TextFileWriter
 	if len(*TxtOutputDir) > 0 {
@@ -345,31 +348,37 @@ func main() {
 		}
 	}
 
+	g := new(errgroup.Group)
 	if err := reader.StreamNotes(*ZipFilePath, func(note *Note) error {
+		n := note // local ref
 		if *StdOut {
-			fmt.Printf("```note\n%+v\n```\n", note)
+			fmt.Printf("```note\n%+v\n```\n", n)
 		}
-
-		g := new(errgroup.Group)
 
 		if txtWriter != nil {
 			g.Go(func() error {
-				return txtWriter.WriteNote(note)
+				return txtWriter.WriteNote(n)
 			})
 		}
 
 		if mdWriter != nil {
 			g.Go(func() error {
-				return mdWriter.WriteNote(note)
+				return mdWriter.WriteNote(n)
 			})
 		}
 
-		if len(*OutputOPMLFile) > 0 {
-			opmlBld.AddNote(note)
+		if opmlBld != nil {
+			g.Go(func() error {
+				opmlBld.AddNote(n)
+				return nil
+			})
 		}
 
-		return g.Wait()
+		return nil
 	}); err != nil {
+		log.Fatal(err)
+	}
+	if err := g.Wait(); err != nil {
 		log.Fatal(err)
 	}
 
