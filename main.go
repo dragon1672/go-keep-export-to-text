@@ -68,6 +68,9 @@ func (j *MicroTime) UnmarshalJSON(data []byte) error {
 func (j *MicroTime) String() string {
 	return time.Time(*j).Format("2006-01-02")
 }
+func (j *MicroTime) FileFriendlyDate() string {
+	return time.Time(*j).Format("2006_01_02")
+}
 
 type ZipToNoteReader struct {
 	SubFolderPath string
@@ -287,12 +290,12 @@ type MdFileWriter struct {
 	outDir string
 }
 
-func (m *MdFileWriter) note2Txt(n *Note) string {
+func (m *MdFileWriter) note2Md(n *Note) string {
 	tmpl, err := template.New("text_file").Parse(`
 {{- define "ListCheck"}}[{{if .IsChecked}}x{{else}} {{end}}]{{end -}}
 {{- define "ListEntry"}} - {{template "ListCheck" .}} {{.Text}}{{end -}}
 {{- /* start of file */ -}}
-# {{.Title}}{{- with .CreatedMicros}} - {{.}}{{end}}
+# {{.Title}}{{- with .CreatedMicros}} - [[{{.}}]]{{end}}
 {{- with .EditedMicros}}
 Last Edited: {{.}}{{end}}
 
@@ -318,11 +321,12 @@ Last Edited: {{.}}{{end}}
 	return sb.String()
 }
 func (m *MdFileWriter) WriteNote(n *Note) error {
-	filePath, err := filepath.Abs(filepath.Join(m.outDir, n.FileName+".md"))
+	filename := fmt.Sprintf("%s_%s.md", n.CreatedMicros.FileFriendlyDate(), n.FileName)
+	filePath, err := filepath.Abs(filepath.Join(m.outDir, filename))
 	if err != nil {
 		return err
 	}
-	return m.writer.WriteFile(m.note2Txt(n), filePath)
+	return m.writer.WriteFile(m.note2Md(n), filePath)
 }
 
 func main() {
