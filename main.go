@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -69,11 +70,14 @@ func (j *MicroTime) String() string {
 }
 
 type opmlBuilder struct {
+	mu    sync.RWMutex
 	notes []*Note
 }
 
 func (o *opmlBuilder) AddNote(note *Note) {
+	o.mu.Lock()
 	o.notes = append(o.notes, note)
+	o.mu.Unlock()
 }
 func (o *opmlBuilder) String() string {
 	tmpl, err := template.New("text_file").Funcs(template.FuncMap{
@@ -115,6 +119,8 @@ func (o *opmlBuilder) String() string {
 		panic(err)
 	}
 
+	o.mu.RLock()
+	defer o.mu.RUnlock()
 	sb := strings.Builder{}
 	if err := tmpl.Execute(&sb, o.notes); err != nil {
 		panic(err)
