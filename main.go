@@ -31,6 +31,7 @@ var (
 	MdOutputDir    = flag.String("md_output_dir", "md_out", "markdown output file dir. Optionally create controlled by --create_out")
 	OutputOPMLFile = flag.String("output_ompl_file", "out.opml", "output OPML file. Optionally create controlled by --create_out")
 	CreateOut      = flag.Bool("create_out", true, "Attempt to create output dir")
+	DefaultTags    = flag.String("default_tags", "google_keep_export", "comma seperated list of default tags to apply to all tags")
 )
 
 type ListItem struct {
@@ -68,12 +69,10 @@ func (j *MicroTime) UnmarshalJSON(data []byte) error {
 func (j *MicroTime) String() string {
 	return time.Time(*j).Format("2006-01-02")
 }
-func (j *MicroTime) FileFriendlyDate() string {
-	return time.Time(*j).Format("2006_01_02")
-}
 
 type ZipToNoteReader struct {
 	SubFolderPath string
+	DefaultTags   []string
 }
 
 func (z *ZipToNoteReader) streamZipFiles(source string, fun func(*zip.File) error) error {
@@ -123,6 +122,9 @@ func (z *ZipToNoteReader) file2Note(f *zip.File) (*Note, error) {
 	if note.Title == "" {
 		glog.Infof("providing default title for file %v", f.FileInfo().Name())
 		note.Title = f.FileInfo().Name()
+	}
+	for _, defaultTag := range z.DefaultTags {
+		note.Labels = append(note.Labels, ListLabel{defaultTag})
 	}
 	return note, nil
 }
@@ -286,8 +288,9 @@ func (t *TextFileWriter) WriteNote(n *Note) error {
 }
 
 type MdFileWriter struct {
-	writer *fileWriter
-	outDir string
+	writer       *fileWriter
+	outDir       string
+	dateExported map[string]bool
 }
 
 func (m *MdFileWriter) note2Md(n *Note) string {
@@ -295,7 +298,8 @@ func (m *MdFileWriter) note2Md(n *Note) string {
 {{- define "ListCheck"}}[{{if .IsChecked}}x{{else}} {{end}}]{{end -}}
 {{- define "ListEntry"}} - {{template "ListCheck" .}} {{.Text}}{{end -}}
 {{- /* start of file */ -}}
-# {{.Title}}{{- with .CreatedMicros}} - [[{{.}}]]{{end}}
+# {{.Title}}{{- with .CreatedMicros}} - [[{{.}}]]
+Created: [[{{.}}]]{{end}}
 {{- with .EditedMicros}}
 Last Edited: {{.}}{{end}}
 
@@ -321,7 +325,15 @@ Last Edited: {{.}}{{end}}
 	return sb.String()
 }
 func (m *MdFileWriter) WriteNote(n *Note) error {
-	filename := fmt.Sprintf("%s_%s.md", n.CreatedMicros.FileFriendlyDate(), n.FileName)
+	if m.dateExported == nil {
+		m.dateExported = make(map[string]bool)
+	}
+	filename := fmt.Sprintf("%s.md", n.CreatedMicros)
+	if _, ok := m.dateExported[filename]; ok {
+		// simple date already exported, include the og file name
+		filename = fmt.Sprintf("%s_%s.md", n.CreatedMicros, n.FileName)
+	}
+	m.dateExported[filename] = true
 	filePath, err := filepath.Abs(filepath.Join(m.outDir, filename))
 	if err != nil {
 		return err
@@ -334,6 +346,7 @@ func main() {
 
 	reader := ZipToNoteReader{
 		SubFolderPath: *SubFolderPath,
+		DefaultTags:   strings.Split(*DefaultTags, ","),
 	}
 	writer := &fileWriter{
 		CreateDir: *CreateOut,
