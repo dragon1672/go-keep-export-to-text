@@ -3,21 +3,22 @@
 package main
 
 import (
-	"archive/zip"
-	"encoding/json"
-	"encoding/xml"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"os"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
-	"text/template"
 	"time"
+
+	"archive/zip"
+	"encoding/json"
+	"encoding/xml"
+	"path/filepath"
+	"text/template"
 
 	"github.com/golang/glog"
 	"golang.org/x/sync/errgroup"
@@ -31,7 +32,7 @@ var (
 
 // Outputs
 var (
-	StdOut         = flag.Bool("std_out", true, "optionally print contents to console")
+	StdOut         = flag.Bool("std_out", false, "optionally print contents to console")
 	TxtOutputDir   = flag.String("txt_output_dir", "out", "text file output file dir. Optionally create directories controlled by --create_out")
 	MdOutputDir    = flag.String("md_output_dir", "md_out", "markdown output file dir. Optionally create directories controlled by --create_out")
 	OutputOPMLFile = flag.String("output_ompl_file", "out.opml", "output OPML file. Optionally create directories controlled by --create_out")
@@ -40,11 +41,12 @@ var (
 const (
 	StratDirectExport = "direct_export"
 	StratFavorDate    = "favor_date" // attempt to only include the date (YYYY-MM-DD) will fall back to date prefixed `YYYY-MM-DD_${direct_export}`
+	StratDateAndTitle    = "date_and_title" // attempt to set (YYYY-MM-DD-TITLE) will default to (YYYY-MM-DD) if no clear title, and will fall back to date prefixed `YYYY-MM-DD_${direct_export}`
 )
 
 // Configurations
 var (
-	FileNameStrat      = flag.String("output_file_name_strat", StratFavorDate, "How to resolve file names")
+	FileNameStrat      = flag.String("output_file_name_strat", StratDateAndTitle, "How to resolve file names")
 	CreateYearFolders  = flag.Bool("output_create_year_folders", true, "Create sub folders for each year")
 	CreateMonthFolders = flag.Bool("output_create_month_folders", true, "Create sub folders for each month (requires --output_create_year_folders, otherwise is ignored) This will include both the month number (0 padded), and the month name")
 	CreateOut          = flag.Bool("create_out", true, "Attempt to create output dir")
@@ -64,6 +66,7 @@ type Note struct {
 	FileName string
 	// parsed fields
 	Title         string      `json:"title"`
+	ExtractedTitle         string
 	TextContent   string      `json:"textContent"`
 	IsTrashed     bool        `json:"isTrashed"`
 	IsArchived    bool        `json:"isArchived"`
@@ -129,7 +132,7 @@ func (z *ZipToNoteReader) file2Note(f *zip.File) (*Note, error) {
 	}
 	defer zippedFile.Close()
 
-	data, err := ioutil.ReadAll(zippedFile)
+	data, err := io.ReadAll(zippedFile)
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +142,7 @@ func (z *ZipToNoteReader) file2Note(f *zip.File) (*Note, error) {
 	if err := json.Unmarshal(data, note); err != nil {
 		return nil, err
 	}
+	note.ExtractedTitle = note.Title // keep the original title
 	if note.Title == "" {
 		glog.Infof("providing default title for file %v", f.FileInfo().Name())
 		note.Title = f.FileInfo().Name()
@@ -215,10 +219,19 @@ func (f *fileNameGenerator) GenerateAndReserve(n *Note) string {
 		f.reservedPaths = make(map[string]bool)
 	}
 	fileName := n.FileName // default to STRAT_DIRECT_EXPORT
-	if f.NameStrat == StratDirectExport {
+	switch f.NameStrat {
+	case StratDirectExport:
 		fileName = n.FileName
-	} else if f.NameStrat == StratFavorDate {
+	case StratFavorDate:
 		fileName = n.CreatedMicros.String() // attempt to make just the date
+		if _, ok := f.reservedPaths[fileName]; ok {
+			fileName = fmt.Sprintf("%s_%s", n.CreatedMicros.String(), n.FileName)
+		}
+	case StratDateAndTitle:
+		fileName = n.CreatedMicros.String() // attempt to make just the date
+		if n.ExtractedTitle != "" {
+			fileName = fmt.Sprintf("%s_%s", fileName, n.ExtractedTitle)
+		}
 		if _, ok := f.reservedPaths[fileName]; ok {
 			fileName = fmt.Sprintf("%s_%s", n.CreatedMicros.String(), n.FileName)
 		}
