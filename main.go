@@ -40,8 +40,8 @@ var (
 
 const (
 	StratDirectExport = "direct_export"
-	StratFavorDate    = "favor_date" // attempt to only include the date (YYYY-MM-DD) will fall back to date prefixed `YYYY-MM-DD_${direct_export}`
-	StratDateAndTitle    = "date_and_title" // attempt to set (YYYY-MM-DD-TITLE) will default to (YYYY-MM-DD) if no clear title, and will fall back to date prefixed `YYYY-MM-DD_${direct_export}`
+	StratFavorDate    = "favor_date"     // attempt to only include the date (YYYY-MM-DD) will fall back to date prefixed `YYYY-MM-DD_${direct_export}`
+	StratDateAndTitle = "date_and_title" // attempt to set (YYYY-MM-DD-TITLE) will default to (YYYY-MM-DD) if no clear title, and will fall back to date prefixed `YYYY-MM-DD_${direct_export}`
 )
 
 // Configurations
@@ -65,15 +65,15 @@ type ListLabel struct {
 type Note struct {
 	FileName string
 	// parsed fields
-	Title         string      `json:"title"`
-	ExtractedTitle         string
-	TextContent   string      `json:"textContent"`
-	IsTrashed     bool        `json:"isTrashed"`
-	IsArchived    bool        `json:"isArchived"`
-	ListContent   []ListItem  `json:"listContent"`
-	Labels        []ListLabel `json:"labels"`
-	EditedMicros  *MicroTime  `json:"userEditedTimestampUsec"`
-	CreatedMicros *MicroTime  `json:"createdTimestampUsec"`
+	Title          string `json:"title"`
+	ExtractedTitle string
+	TextContent    string      `json:"textContent"`
+	IsTrashed      bool        `json:"isTrashed"`
+	IsArchived     bool        `json:"isArchived"`
+	ListContent    []ListItem  `json:"listContent"`
+	Labels         []ListLabel `json:"labels"`
+	EditedMicros   *MicroTime  `json:"userEditedTimestampUsec"`
+	CreatedMicros  *MicroTime  `json:"createdTimestampUsec"`
 }
 
 type MicroTime time.Time
