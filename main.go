@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path"
 	"strconv"
@@ -259,7 +258,7 @@ func (o *opmlBuilder) AddNote(note *Note) {
 	o.notes = append(o.notes, note)
 	o.mu.Unlock()
 }
-func (o *opmlBuilder) ToOPML() string {
+func (o *opmlBuilder) ToOPML() (string, error) {
 	tmpl, err := template.New("text_file").Funcs(template.FuncMap{
 		"escapeXML": func(s string) string {
 			sb := strings.Builder{}
@@ -296,19 +295,23 @@ func (o *opmlBuilder) ToOPML() string {
 {{- /* end of file */ -}}
 `)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	sb := strings.Builder{}
 	if err := tmpl.Execute(&sb, o.notes); err != nil {
-		panic(err)
+		return "", err
 	}
-	return sb.String()
+	return sb.String(), nil
 }
 func (o *opmlBuilder) WriteOPML(outFile string) error {
-	return o.Writer.WriteFile(o.ToOPML(), outFile)
+	ompl, err := o.ToOPML()
+	if err != nil {
+		return err
+	}
+	return o.Writer.WriteFile(ompl, outFile)
 }
 
 type TextFileWriter struct {
@@ -317,7 +320,7 @@ type TextFileWriter struct {
 	outDir    string
 }
 
-func (t *TextFileWriter) note2Txt(n *Note) string {
+func (t *TextFileWriter) note2Txt(n *Note) (string, error) {
 	tmpl, err := template.New("text_file").Parse(`
 {{- define "ListCheck"}}[{{if .IsChecked}}x{{else}} {{end}}]{{end -}}
 {{- define "ListEntry"}} - {{template "ListCheck" .}} {{.Text}}{{end -}}
@@ -340,14 +343,14 @@ Edited: {{.}}{{end}}
 {{- /* end of file */ -}}
 `)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 
 	sb := strings.Builder{}
 	if err := tmpl.Execute(&sb, n); err != nil {
-		panic(err)
+		return "", err
 	}
-	return sb.String()
+	return sb.String(), nil
 }
 func (t *TextFileWriter) WriteNote(n *Note) error {
 	fileName := t.generator.GenerateAndReserve(n)
@@ -355,7 +358,11 @@ func (t *TextFileWriter) WriteNote(n *Note) error {
 	if err != nil {
 		return err
 	}
-	return t.writer.WriteFile(t.note2Txt(n), filePath)
+	txt, err := t.note2Txt(n)
+	if err != nil {
+		return err
+	}
+	return t.writer.WriteFile(txt, filePath)
 }
 
 type MdFileWriter struct {
@@ -364,7 +371,7 @@ type MdFileWriter struct {
 	outDir    string
 }
 
-func (m *MdFileWriter) note2Md(n *Note) string {
+func (m *MdFileWriter) note2Md(n *Note) (string, error) {
 	tmpl, err := template.New("text_file").Parse(`
 {{- define "ListCheck"}}[{{if .IsChecked}}x{{else}} {{end}}]{{end -}}
 {{- define "ListEntry"}} - {{template "ListCheck" .}} {{.Text}}{{end -}}
@@ -386,14 +393,14 @@ Last Edited: {{.}}{{end}}
 {{- /* end of file */ -}}
 `)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 
 	sb := strings.Builder{}
 	if err := tmpl.Execute(&sb, n); err != nil {
-		panic(err)
+		return "", err
 	}
-	return sb.String()
+	return sb.String(), nil
 }
 func (m *MdFileWriter) WriteNote(n *Note) error {
 	fileName := m.generator.GenerateAndReserve(n)
@@ -401,7 +408,11 @@ func (m *MdFileWriter) WriteNote(n *Note) error {
 	if err != nil {
 		return err
 	}
-	return m.writer.WriteFile(m.note2Md(n), filePath)
+	md, err := m.note2Md(n)
+	if err != nil {
+		return err
+	}
+	return m.writer.WriteFile(md, filePath)
 }
 
 func main() {
@@ -471,15 +482,15 @@ func main() {
 
 		return nil
 	}); err != nil {
-		log.Fatal(err)
+		glog.Fatalf("error reading notes from zip file %s: %v", *ZipFilePath, err)
 	}
 	if err := g.Wait(); err != nil {
-		log.Fatal(err)
+		glog.Errorf("error writing notes: %v", err)
 	}
 
 	if opmlBld != nil {
 		if err := opmlBld.WriteOPML(*OutputOPMLFile); err != nil {
-			log.Fatalf("error writing file %s: %v", *OutputOPMLFile, err)
+			glog.Errorf("error writing file %s: %v", *OutputOPMLFile, err)
 		}
 	}
 }
