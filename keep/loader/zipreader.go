@@ -14,9 +14,30 @@ import (
 	"github.com/golang/glog"
 )
 
+type Filter func(*Note) bool
+
+type Filters []Filter
+
+func (f Filters) AndFilter() Filter {
+	return func(n *Note) bool {
+		for _, filter := range f {
+			if !filter(n) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+func (f Filters) Append(filter Filter) Filters {
+	return append(f, filter)
+}
+
+
 type ZipToNoteReader struct {
 	SubFolderPath string
 	DefaultTags   []string
+	Filter       Filter
 }
 
 func (z *ZipToNoteReader) streamZipFiles(source string, fun func(*zip.File) error) error {
@@ -85,9 +106,11 @@ func (z *ZipToNoteReader) StreamNotes(source string, fun func(*Note) error) erro
 		if err != nil {
 			return fmt.Errorf("error reading file %s: %v", file.Name, err)
 		}
-		if note.IsTrashed || note.IsArchived {
-			glog.Infof("skipping trashed or archived entry %v", file.Name)
-			return nil // skip the dead stuffs
+		if z.Filter != nil {
+			if !z.Filter(note) {
+				glog.Infof("skipping filtered entry %v", file.Name)
+				return nil // skip
+			}
 		}
 		return fun(note)
 	})

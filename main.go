@@ -5,6 +5,7 @@ package main
 import (
 	"flag"
 	"strings"
+	"time"
 
 	"github.com/golang/glog"
 	"golang.org/x/sync/errgroup"
@@ -22,6 +23,9 @@ import (
 var (
 	ZipFilePath   = flag.String("zip_file_path", "example-takeout.zip", "zip file path to be unpacked and parsed")
 	SubFolderPath = flag.String("sub_folder_path", "Takeout/Keep/", "required sub folder")
+	
+	DateMin	   = flag.String("date_min", "2024-09-30", "optional min date filter (inclusive) format YYYY-MM-DD")
+	DateMax	   = flag.String("date_max", "", "optional max date filter (inclusive) format YYYY-MM-DD")
 )
 
 // Outputs
@@ -74,13 +78,47 @@ func loadWriters() []keep.NoteWriter {
 	return ws
 }
 
+func dateParser(s string) (time.Time, bool, error) {
+	if s == "" {
+		var t time.Time
+		return t, false, nil
+	}
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		var t time.Time
+		return t, false, err
+	}
+	return t, true, nil
+}
 
 func main() {
 	flag.Parse()
 
+	filters := loader.Filters {
+		func(n*loader.Note) bool { return !n.IsTrashed},
+		func(n*loader.Note) bool { return !n.IsArchived},
+	}
+
+	if dateMin, ok, err := dateParser(*DateMin); err != nil {
+		glog.Fatalf("error parsing date min %q: %v", *DateMin, err)
+	} else if ok {
+		filters = filters.Append(func(n *loader.Note) bool {
+			return n.CreatedMicros.Time().UnixNano() >= dateMin.UnixNano()
+		})
+	}
+
+	if dateMax, ok, err := dateParser(*DateMax); err != nil {
+		glog.Fatalf("error parsing date max %q: %v", *DateMax, err)
+	} else if ok {
+		filters = filters.Append(func(n *loader.Note) bool {
+			return n.CreatedMicros.Time().UnixNano() >= dateMax.UnixNano()
+		})
+	}
+
 	reader := loader.ZipToNoteReader{
 		SubFolderPath: *SubFolderPath,
 		DefaultTags:   strings.Split(*DefaultTags, ","),
+		Filter:        filters.AndFilter(),
 	}
 
 	writers := loadWriters()
