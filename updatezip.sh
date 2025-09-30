@@ -1,3 +1,3 @@
 rm takeout-example.zip
 cd takeout-example
-zip -r ../takeout-example.zip . 
+zip -r ../example-takeout.zip . 

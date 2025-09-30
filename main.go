@@ -20,7 +20,7 @@ import (
 
 // Inputs
 var (
-	ZipFilePath   = flag.String("zip_file_path", "takeout-example.zip", "zip file path to be unpacked and parsed")
+	ZipFilePath   = flag.String("zip_file_path", "example-takeout.zip", "zip file path to be unpacked and parsed")
 	SubFolderPath = flag.String("sub_folder_path", "Takeout/Keep/", "required sub folder")
 )
 

@@ -17,6 +17,9 @@ md_out/
 *.opml
 *.pdf
 
+# Local Inputs
+takeout-*.zip
+
 # Dependency directories (remove the comment below to include it)
 vendor
 .idea/
