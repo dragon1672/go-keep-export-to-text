@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"text/template"
 
+	"codeberg.org/go-pdf/fpdf"
 	"github.com/golang/glog"
 	"golang.org/x/sync/errgroup"
 )
@@ -35,6 +36,9 @@ var (
 	TxtOutputDir   = flag.String("txt_output_dir", "out", "text file output file dir. Optionally create directories controlled by --create_out")
 	MdOutputDir    = flag.String("md_output_dir", "md_out", "markdown output file dir. Optionally create directories controlled by --create_out")
 	OutputOPMLFile = flag.String("output_ompl_file", "out.opml", "output OPML file. Optionally create directories controlled by --create_out")
+
+	OutputPDFFile = flag.String("output_pdf_file", "out.pdf", "output PDF file. This will compact multiple notes into a PDF")
+	PDFWordLimit = flag.Int("pdf_word_limit", 500000, "Limit the number of words in the PDF output. This is default set to notebooklm limit of 500,000 words")
 )
 
 const (
@@ -180,6 +184,15 @@ type fileWriter struct {
 	Stdout    bool // also write to std out
 }
 
+func (f *fileWriter) DirPrep(destination string) error {
+	if f.CreateDir {
+		if err := os.MkdirAll(filepath.Dir(destination), os.ModePerm); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (f *fileWriter) WriteFile(data string, destination string) error {
 	if f.CreateDir {
 		if err := os.MkdirAll(filepath.Dir(destination), os.ModePerm); err != nil {
@@ -207,10 +220,14 @@ type fileNameGenerator struct {
 	GenerateMonthFolders bool
 	NameStrat            string
 
-	mu            sync.Mutex
+	mu            sync.RWMutex
 	reservedPaths map[string]bool
 }
 
+type noteWriteRequest struct {
+	note *Note
+	err  chan error
+}
 func (f *fileNameGenerator) GenerateAndReserve(n *Note) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -247,17 +264,23 @@ func (f *fileNameGenerator) GenerateAndReserve(n *Note) string {
 	return fileName
 }
 
+// opmlBuilder buffers notes in memory then writes to a single file.
 type opmlBuilder struct {
-	mu     sync.RWMutex
-	notes  []*Note
-	Writer *fileWriter
+	mu        sync.RWMutex
+	notes     []*Note
+	outputFile string
+	Writer    *fileWriter
+	writeChan chan *noteWriteRequest // Channel for writing notes
+	done      chan bool
 }
 
-func (o *opmlBuilder) AddNote(note *Note) {
+func (o *opmlBuilder) WriteNote(note *Note) error {
 	o.mu.Lock()
 	o.notes = append(o.notes, note)
 	o.mu.Unlock()
+	return nil
 }
+
 func (o *opmlBuilder) ToOPML() (string, error) {
 	tmpl, err := template.New("text_file").Funcs(template.FuncMap{
 		"escapeXML": func(s string) string {
@@ -306,12 +329,76 @@ func (o *opmlBuilder) ToOPML() (string, error) {
 	}
 	return sb.String(), nil
 }
-func (o *opmlBuilder) WriteOPML(outFile string) error {
+func (o *opmlBuilder) Flush() error {
 	ompl, err := o.ToOPML()
 	if err != nil {
 		return err
 	}
-	return o.Writer.WriteFile(ompl, outFile)
+	return o.Writer.WriteFile(ompl, o.outputFile)
+}
+
+// pdfBuilder buffers notes in memory then writes to a single file.
+type pdfBuilder struct {
+	mu        sync.RWMutex
+	currentPDF	   *fpdf.Fpdf
+	currentWordCount int
+
+	outputDir string
+	outputCnt int
+	Writer    *fileWriter
+}
+
+func (p *pdfBuilder) WriteNote(note *Note) error {
+	title, subheader, body, err := note2TxtParts(note)
+	if err != nil {
+		return err
+	}
+
+	wordCount := len(strings.Fields(title)) + len(strings.Fields(subheader)) + len(strings.Fields(body))
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.currentPDF == nil {
+		p.currentPDF = fpdf.New("P", "mm", "A4", "")
+	}
+	if p.currentWordCount + wordCount > *PDFWordLimit {
+		// Assumption that all notes are similar sizes so no fancy packing algorithm.
+		// Just flush when we hit the limit.
+		if err := p.unlockedFlush(); err != nil {
+			return err
+		}
+	}
+
+	p.currentPDF.AddPage()
+	p.currentPDF.SetFont("Arial", "B", 14)
+	p.currentPDF.MultiCell(0, 10, title, "", "C", false)
+	p.currentPDF.SetFont("Arial", "I", 10)
+	p.currentPDF.MultiCell(0, 10, subheader, "", "C", false)
+	p.currentPDF.Ln(5)
+	p.currentPDF.SetFont("Arial", "", 12)
+	p.currentPDF.MultiCell(0, 7, body, "", "L", false)
+	p.currentWordCount += wordCount
+	return nil
+}
+
+func (p *pdfBuilder) unlockedFlush() error {
+	outFile := fmt.Sprintf("%s/out_%d.pdf", p.outputDir, p.outputCnt)
+	p.Writer.DirPrep(outFile)
+	glog.Infof("flushing %d words to PDF to %s", p.currentWordCount, outFile)
+	if err := p.currentPDF.OutputFileAndClose(outFile); err != nil {
+		return err
+	}
+	p.outputCnt++
+	p.currentPDF = fpdf.New("P", "mm", "A4", "")
+	p.currentWordCount = 0
+	return nil
+}
+
+
+func (p *pdfBuilder) Flush() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.unlockedFlush()
 }
 
 type TextFileWriter struct {
@@ -320,17 +407,74 @@ type TextFileWriter struct {
 	outDir    string
 }
 
-func (t *TextFileWriter) note2Txt(n *Note) (string, error) {
+func (t *TextFileWriter) Flush() error {return nil }
+
+func note2Txt(n *Note) (string, error) {
+	title, subheader, body, err := note2TxtParts(n)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s\n%s\n\n%s", title, subheader, body), nil
+}
+
+func note2TxtParts(n *Note) (string, string, string, error) {
+	title, err := note2TxtTitle(n)
+	if err != nil {
+		return "","","", err
+	}
+	subHeader, err := note2TxtSubHeader(n)
+	if err != nil {
+		return "","","", err
+	}
+	body, err := note2TxtBody(n)
+	if err != nil {
+		return "","","", err
+	}
+	return title, subHeader, body, nil
+}
+
+func note2TxtTitle(n *Note) (string, error) {
 	tmpl, err := template.New("text_file").Parse(`
-{{- define "ListCheck"}}[{{if .IsChecked}}x{{else}} {{end}}]{{end -}}
-{{- define "ListEntry"}} - {{template "ListCheck" .}} {{.Text}}{{end -}}
 {{- /* start of file */ -}}
 {{- .Title}}
+{{- /* end of file */ -}}
+`)
+	if err != nil {
+		return "", err
+	}
+
+	sb := strings.Builder{}
+	if err := tmpl.Execute(&sb, n); err != nil {
+		return "", err
+	}
+	return strings.Trim(sb.String(), "\n "), nil
+}
+
+func note2TxtSubHeader(n *Note) (string, error) {
+	tmpl, err := template.New("text_file").Parse(`
+{{- /* start of file */ -}}
 {{- with .CreatedMicros}}
 Created: {{.}}{{end}}
 {{- with .EditedMicros}}
 Edited: {{.}}{{end}}
+{{- /* end of file */ -}}
+`)
+	if err != nil {
+		return "", err
+	}
 
+	sb := strings.Builder{}
+	if err := tmpl.Execute(&sb, n); err != nil {
+		return "", err
+	}
+	return strings.Trim(sb.String(), "\n "), nil
+}
+
+func note2TxtBody(n *Note) (string, error) {
+	tmpl, err := template.New("text_file").Parse(`
+{{- define "ListCheck"}}[{{if .IsChecked}}x{{else}} {{end}}]{{end -}}
+{{- define "ListEntry"}} - {{template "ListCheck" .}} {{.Text}}{{end -}}
+{{- /* start of file */ -}}
 {{with .TextContent}}{{.}}
 {{end}}
 {{- with .ListContent}}{{range .}}{{template "ListEntry" .}}
@@ -350,7 +494,7 @@ Edited: {{.}}{{end}}
 	if err := tmpl.Execute(&sb, n); err != nil {
 		return "", err
 	}
-	return sb.String(), nil
+	return strings.Trim(sb.String(), "\n "), nil
 }
 func (t *TextFileWriter) WriteNote(n *Note) error {
 	fileName := t.generator.GenerateAndReserve(n)
@@ -358,13 +502,14 @@ func (t *TextFileWriter) WriteNote(n *Note) error {
 	if err != nil {
 		return err
 	}
-	txt, err := t.note2Txt(n)
+	txt, err := note2Txt(n)
 	if err != nil {
 		return err
 	}
 	return t.writer.WriteFile(txt, filePath)
 }
 
+// MdFileWriter writes the note to a markdown file.
 type MdFileWriter struct {
 	writer    *fileWriter
 	generator *fileNameGenerator
@@ -415,6 +560,18 @@ func (m *MdFileWriter) WriteNote(n *Note) error {
 	return m.writer.WriteFile(md, filePath)
 }
 
+func (m *MdFileWriter) Flush() error {return nil }
+
+type noteWriter interface {
+	WriteNote(n *Note) error
+	Flush() error
+}
+
+type writerContext struct {
+	writer noteWriter
+	group  *errgroup.Group
+}
+
 func main() {
 	flag.Parse()
 
@@ -432,51 +589,36 @@ func main() {
 		NameStrat:            *FileNameStrat,
 	}
 
-	var opmlBld *opmlBuilder
-	if len(*OutputOPMLFile) > 0 {
-		opmlBld = &opmlBuilder{Writer: writer}
-	}
-	var txtWriter *TextFileWriter
-	if len(*TxtOutputDir) > 0 {
-		txtWriter = &TextFileWriter{
-			writer:    writer,
-			generator: fileGenerator,
-			outDir:    *TxtOutputDir,
-		}
-	}
+	writers := make([]writerContext, 0)
 
-	var mdWriter *MdFileWriter
-	if len(*MdOutputDir) > 0 {
-		mdWriter = &MdFileWriter{
-			writer:    writer,
-			generator: fileGenerator,
-			outDir:    *MdOutputDir,
-		}
+	if *OutputOPMLFile != "" {
+		opmlBld := &opmlBuilder{Writer: writer, notes: make([]*Note, 0), outputFile: *OutputOPMLFile}
+		writers = append(writers, writerContext{writer: opmlBld})
+	}
+	if *TxtOutputDir != "" {
+		txtWriter := &TextFileWriter{writer: writer, generator: fileGenerator, outDir: *TxtOutputDir}
+		writers = append(writers, writerContext{writer: txtWriter})
+	}
+	if *MdOutputDir != "" {
+		mdWriter := &MdFileWriter{writer: writer, generator: fileGenerator, outDir: *MdOutputDir}
+		writers = append(writers, writerContext{writer: mdWriter})
+	}
+	if *OutputPDFFile != "" {
+		pdfBld := &pdfBuilder{Writer: writer, outputDir: path.Dir(*OutputPDFFile)}
+		writers = append(writers, writerContext{writer: pdfBld})
 	}
 
 	g := new(errgroup.Group)
 	if err := reader.StreamNotes(*ZipFilePath, func(note *Note) error {
 		n := note // local ref
-		if *StdOut {
+		if *StdOut { // consider printing the note into a buffer so that its not intermingled.
 			fmt.Printf("```note\n%+v\n```\n", n)
 		}
 
-		if txtWriter != nil {
+		for _, wc := range writers {
+			wc := wc // local ref
 			g.Go(func() error {
-				return txtWriter.WriteNote(n)
-			})
-		}
-
-		if mdWriter != nil {
-			g.Go(func() error {
-				return mdWriter.WriteNote(n)
-			})
-		}
-
-		if opmlBld != nil {
-			g.Go(func() error {
-				opmlBld.AddNote(n)
-				return nil
+				return wc.writer.WriteNote(n)
 			})
 		}
 
@@ -488,9 +630,9 @@ func main() {
 		glog.Errorf("error writing notes: %v", err)
 	}
 
-	if opmlBld != nil {
-		if err := opmlBld.WriteOPML(*OutputOPMLFile); err != nil {
-			glog.Errorf("error writing file %s: %v", *OutputOPMLFile, err)
+	for _, wc := range writers {
+		if err := wc.writer.Flush(); err != nil {
+			glog.Errorf("error flushing writer: %v", err)
 		}
 	}
 }

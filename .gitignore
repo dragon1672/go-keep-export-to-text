@@ -15,6 +15,7 @@
 out/
 md_out/
 *.opml
+*.pdf
 
 # Dependency directories (remove the comment below to include it)
 vendor
