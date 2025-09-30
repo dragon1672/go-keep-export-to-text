@@ -49,10 +49,10 @@ func (b *Builder) WriteNote(note *loader.Note) error {
 	b.currentPDF.SetFont("Arial", "B", 14)
 	b.currentPDF.MultiCell(0, 10, title, "", "C", false)
 	b.currentPDF.SetFont("Arial", "I", 10)
-	b.currentPDF.MultiCell(0, 10, subheader, "", "C", false)
+	b.currentPDF.MultiCell(0, 5, subheader, "", "C", false)
 	b.currentPDF.Ln(5)
 	b.currentPDF.SetFont("Arial", "", 12)
-	b.currentPDF.MultiCell(0, 7, body, "", "L", false)
+	b.currentPDF.MultiCell(0, 5, body, "", "L", false)
 	b.currentWordCount += wordCount
 	return nil
 }
